@@ -12,7 +12,11 @@ DIST_DIR 	= $(ROOT_DIR)dist/
 ETCD_VER			= v3.0.14
 ETCD_DOWNLOAD_URL	= https://github.com/coreos/etcd/releases/download
 
-DOCKER_TAG = $(shell date +%Y%m%d%H%M)
+DOCKER_TAG			:= $(tag)
+
+ifeq ("$(DOCKER_TAG)","")
+	DOCKER_TAG		:= $(shell date +%Y%m%d%H%M)
+endif
 
 .PHONY: release
 release: dist_dir apiserver proxy;
@@ -21,11 +25,15 @@ release: dist_dir apiserver proxy;
 release_darwin: darwin dist_dir apiserver proxy;
 
 .PHONY: docker
-docker: release download_etcd;
+docker: release download_etcd ui;
 	@echo ========== current docker tag is: $(DOCKER_TAG) ==========
 	docker build -t fagongzi/gateway:$(DOCKER_TAG) -f Dockerfile .
 	docker build -t fagongzi/proxy:$(DOCKER_TAG) -f Dockerfile-proxy .
 	docker build -t fagongzi/apiserver:$(DOCKER_TAG) -f Dockerfile-apiserver .
+
+.PHONY: ui
+ui: ; $(info ======== compile ui:)
+	git clone https://github.com/fagongzi/gateway-ui-vue.git $(DIST_DIR)ui
 
 .PHONY: darwin
 darwin:
@@ -53,7 +61,6 @@ dist_dir: ; $(info ======== prepare distribute dir:)
 .PHONY: clean
 clean: ; $(info ======== clean all:)
 	rm -rf $(DIST_DIR)*
-	rm -rf $(ROOT_DIR)Library
 
 .PHONY: help
 help:
@@ -64,7 +71,6 @@ help:
 
 UNAME_S := $(shell uname -s)
 
-# 设置默认编译目标
 ifeq ($(UNAME_S),Darwin)
 	.DEFAULT_GOAL := release_darwin
 else

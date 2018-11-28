@@ -38,6 +38,12 @@ type Client interface {
 	RemoveBind(cluster, server uint64) error
 	RemoveClusterBind(cluster uint64) error
 	GetBindServers(cluster uint64) ([]uint64, error)
+
+	Clean() error
+	SetID(id uint64) error
+	Batch(batch *rpcpb.BatchReq) (*rpcpb.BatchRsp, error)
+
+	Close() error
 }
 
 // NewClient returns a gateway client, using direct address
@@ -65,17 +71,20 @@ type client struct {
 }
 
 func newDiscoveryClient(opts ...grpcx.ClientOption) (*client, error) {
-	clients := grpcx.NewGRPCClient(func(name string, raw *grpc.ClientConn) interface{} {
-		if name == rpcpb.ServiceMeta {
-			return rpcpb.NewMetaServiceClient(raw)
-		}
-
-		return nil
-	}, opts...)
+	value := &client{}
+	clients := grpcx.NewGRPCClient(value.factory, opts...)
 
 	return &client{
 		clients: clients,
 	}, nil
+}
+
+func (c *client) factory(name string, raw *grpc.ClientConn) interface{} {
+	if name == rpcpb.ServiceMeta {
+		return rpcpb.NewMetaServiceClient(raw)
+	}
+
+	return nil
 }
 
 func (c *client) getMetaClient() (rpcpb.MetaServiceClient, error) {
@@ -451,4 +460,39 @@ func (c *client) GetBindServers(cluster uint64) ([]uint64, error) {
 	}
 
 	return rsp.Servers, nil
+}
+
+func (c *client) Clean() error {
+	meta, err := c.getMetaClient()
+	if err != nil {
+		return err
+	}
+
+	_, err = meta.Clean(context.Background(), &rpcpb.CleanReq{})
+	return err
+}
+
+func (c *client) SetID(id uint64) error {
+	meta, err := c.getMetaClient()
+	if err != nil {
+		return err
+	}
+
+	_, err = meta.SetID(context.Background(), &rpcpb.SetIDReq{
+		ID: id,
+	})
+	return err
+}
+
+func (c *client) Batch(batch *rpcpb.BatchReq) (*rpcpb.BatchRsp, error) {
+	meta, err := c.getMetaClient()
+	if err != nil {
+		return nil, err
+	}
+
+	return meta.Batch(context.Background(), batch, grpc.FailFast(true))
+}
+
+func (c *client) Close() error {
+	return c.clients.Close()
 }

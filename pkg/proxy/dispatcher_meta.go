@@ -403,15 +403,18 @@ func (r *dispatcher) sortAPIs() {
 
 func (r *dispatcher) refreshAllQPS() {
 	for _, svr := range r.servers {
-		r.refreshQPS(svr.meta)
+		qps := r.refreshQPS(svr.meta)
 		svr.updateMeta(svr.meta)
+		svr.meta.MaxQPS = qps
 	}
 }
 
-func (r *dispatcher) refreshQPS(svr *metapb.Server) {
+func (r *dispatcher) refreshQPS(svr *metapb.Server) (originQPS int64) {
+	originQPS = svr.MaxQPS
 	if len(r.proxies) > 0 {
 		svr.MaxQPS = svr.MaxQPS / int64(len(r.proxies))
 	}
+	return
 }
 
 func (r *dispatcher) addServer(svr *metapb.Server) error {
@@ -422,9 +425,10 @@ func (r *dispatcher) addServer(svr *metapb.Server) error {
 		return errServerExists
 	}
 
-	r.refreshQPS(svr)
+	qps := r.refreshQPS(svr)
 
 	rt := newServerRuntime(svr, r.tw)
+	svr.MaxQPS = qps
 	r.servers[svr.ID] = rt
 
 	r.addAnalysis(rt)
@@ -446,8 +450,9 @@ func (r *dispatcher) updateServer(meta *metapb.Server) error {
 		return errServerNotFound
 	}
 
-	r.refreshQPS(meta)
+	qps := r.refreshQPS(meta)
 	rt.updateMeta(meta)
+	meta.MaxQPS = qps
 	r.addAnalysis(rt)
 	r.addToCheck(rt)
 
@@ -467,6 +472,7 @@ func (r *dispatcher) removeServer(id uint64) error {
 		return errServerNotFound
 	}
 
+	svr.heathTimeout.Stop()
 	delete(r.servers, id)
 	for _, cluster := range r.clusters {
 		cluster.remove(id)
@@ -553,7 +559,7 @@ func (r *dispatcher) addBind(bind *metapb.Bind) error {
 
 	cluster, ok := r.clusters[bind.ClusterID]
 	if !ok {
-		log.Warnf("add bind failed, cluster <%s> not found",
+		log.Warnf("add bind failed, cluster <%d> not found",
 			bind.ClusterID)
 		return errClusterNotFound
 	}

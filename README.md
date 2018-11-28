@@ -21,11 +21,17 @@ Gateway 是一个基于HTTP协议的restful的API网关。可以作为统一的A
 * API 默认返回值
 * API 定制返回值
 * API 结果Cache
+* JWT Authorization
+* API Metric导入Prometheus
+* API 失败重试
 * 后端server的健康检查
 * 开放管理API(GRPC、Restful)
+* 支持websocket
+* 支持在线迁移数据
 
 ## Docker
-使用 `docker pull fagongzi/gateway` 命令下载Docker镜像, 使用 `docker run -d fagongzi/gateway` 运行镜像. 镜像启动后export 3个端口:
+### 快速开始
+使用 `docker pull fagongzi/gateway` 命令下载Docker镜像, 使用 `docker run -d -p 9093:9093 -p 80:80 -p 9092:9092 fagongzi/gateway` 运行镜像. 镜像启动后export 3个端口:
 
 * 80
 
@@ -37,13 +43,29 @@ Gateway 是一个基于HTTP协议的restful的API网关。可以作为统一的A
 
 * 9093
 
-  APIServer的对外HTTP Restful的端口
+  APIServer的对外HTTP Restful的端口，访问 `http://127.0.0.1:9093/ui/index.html`访问WEBUI
+
+
+### 可用的docker镜像
+
+* `fagongzi/gateway` 
+
+   镜像是一个quickstart镜像，包含了3个组件：etcd,proxy,apiserver， `仅限于快速体验，不能使用在生产`
+
+* `fagongzi/proxy` 
+
+   proxy组件，`生产可用`
+
+* `fagongzi/apiserver` 
+
+   apiserver组件，`生产可用`
 
 ## 架构
 ![](./images/arch.png)
 
 ## WebUI
 可用的Gateway的WebUI的项目：
+* [官方](https://github.com/fagongzi/gateway-ui-vue)
 * [gateway_ui](https://github.com/archfish/gateway_ui)
 * [gateway_admin_ui](https://github.com/wilehos/gateway_admin_ui)
 
@@ -53,8 +75,8 @@ Gateway由`proxy`, `apiserver`组成
 ### Proxy
 Proxy是Gateway对终端用户提供服务的组件，Proxy是一个无状态的节点，可以部署多个来支撑更大的流量，[更多](./docs/proxy.md)。
 
-### ApiServer 
-ApiServer对外提供GRPC的接口，用来管理元信息，[更多](./docs/apiserver.md)。
+### ApiServer
+ApiServer对外提供GRPC和Restful来管理元信息，ApiServer同时集成了官方的WebUI，[更多](./docs/apiserver.md)。
 
 ## Gateway中的概念
 ### Server
@@ -68,6 +90,9 @@ API是Gateway的核心概念，我们可以在Gateway的中维护对外的API，
 
 ### Routing
 Routing是一个路由策略，根据HTTP Request中的Cookie，Querystring、Header、Path中的一些信息把流量分发到或者复制到指定的Cluster，通过这个功能，我们可以实现AB Test和线上引流，[更多](./docs/routing.md)。
-  
+
+### 参与开发
+[更多](./docs/build.md)
+
 # 交流方式-微信
 ![](./images/qr.jpg)
