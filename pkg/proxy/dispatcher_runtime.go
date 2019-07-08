@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"container/list"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -12,34 +11,47 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
+	"github.com/fagongzi/gateway/pkg/expr"
 	"github.com/fagongzi/gateway/pkg/lb"
 	"github.com/fagongzi/gateway/pkg/pb/metapb"
 	"github.com/fagongzi/gateway/pkg/util"
 	"github.com/fagongzi/goetty"
 	"github.com/fagongzi/log"
-	"github.com/fagongzi/util/collection"
 	"github.com/fagongzi/util/hack"
 	pbutil "github.com/fagongzi/util/protoc"
 	"github.com/valyala/fasthttp"
-	"golang.org/x/time/rate"
 )
 
 var (
 	dependP = regexp.MustCompile(`\$\w+\.\w+`)
 )
 
+type binds struct {
+	servers []*bindInfo
+	actives []metapb.Server
+}
+
+type bindInfo struct {
+	svrID  uint64
+	status metapb.Status
+}
+
 type clusterRuntime struct {
 	meta *metapb.Cluster
-	svrs *list.List
 	lb   lb.LoadBalance
 }
 
 func newClusterRuntime(meta *metapb.Cluster) *clusterRuntime {
 	return &clusterRuntime{
 		meta: meta,
-		svrs: list.New(),
 		lb:   lb.NewLoadBalance(meta.LoadBalance),
 	}
+}
+
+func (c *clusterRuntime) clone() *clusterRuntime {
+	meta := &metapb.Cluster{}
+	pbutil.MustUnmarshal(meta, pbutil.MustMarshal(c.meta))
+	return newClusterRuntime(meta)
 }
 
 func (c *clusterRuntime) updateMeta(meta *metapb.Cluster) {
@@ -47,50 +59,20 @@ func (c *clusterRuntime) updateMeta(meta *metapb.Cluster) {
 	c.lb = lb.NewLoadBalance(meta.LoadBalance)
 }
 
-func (c *clusterRuntime) foreach(do func(uint64)) {
-	for iter := c.svrs.Back(); iter != nil; iter = iter.Prev() {
-		addr, _ := iter.Value.(uint64)
-		do(addr)
-	}
-}
-
-func (c *clusterRuntime) remove(id uint64) {
-	collection.Remove(c.svrs, id)
-	log.Infof("bind <%d,%d> inactived", c.meta.ID, id)
-}
-
-func (c *clusterRuntime) add(id uint64) {
-	if collection.IndexOf(c.svrs, id) >= 0 {
-		return
-	}
-
-	c.svrs.PushBack(id)
-	log.Infof("bind <%d,%d> actived", c.meta.ID, id)
-}
-
-func (c *clusterRuntime) selectServer(req *fasthttp.Request) uint64 {
-	index := c.lb.Select(req, c.svrs)
-	if 0 > index {
-		return 0
-	}
-
-	e := collection.Get(c.svrs, index)
-	if nil == e {
-		return 0
-	}
-
-	return e.Value.(uint64)
+func (c *clusterRuntime) selectServer(req *fasthttp.RequestCtx, svrs []metapb.Server) uint64 {
+	return c.lb.Select(req, svrs)
 }
 
 type abstractSupportProtectedRuntime struct {
 	sync.RWMutex
 
-	id      uint64
-	tw      *goetty.TimeoutWheel
-	limiter *rate.Limiter
-	circuit metapb.CircuitStatus
-	cb      *metapb.CircuitBreaker
-	barrier *util.RateBarrier
+	id        uint64
+	tw        *goetty.TimeoutWheel
+	activeQPS int64
+	limiter   *rateLimiter
+	circuit   metapb.CircuitStatus
+	cb        *metapb.CircuitBreaker
+	barrier   *util.RateBarrier
 }
 
 func (s *abstractSupportProtectedRuntime) getCircuitStatus() metapb.CircuitStatus {
@@ -141,15 +123,15 @@ type serverRuntime struct {
 	abstractSupportProtectedRuntime
 
 	meta             *metapb.Server
-	status           metapb.Status
 	heathTimeout     goetty.Timeout
 	checkFailCount   int
 	useCheckDuration time.Duration
 }
 
-func newServerRuntime(meta *metapb.Server, tw *goetty.TimeoutWheel) *serverRuntime {
+func newServerRuntime(meta *metapb.Server, tw *goetty.TimeoutWheel, activeQPS int64) *serverRuntime {
 	rt := &serverRuntime{}
 	rt.tw = tw
+	rt.activeQPS = activeQPS
 	rt.updateMeta(meta)
 	return rt
 }
@@ -157,19 +139,21 @@ func newServerRuntime(meta *metapb.Server, tw *goetty.TimeoutWheel) *serverRunti
 func (s *serverRuntime) clone() *serverRuntime {
 	meta := &metapb.Server{}
 	pbutil.MustUnmarshal(meta, pbutil.MustMarshal(s.meta))
-	return newServerRuntime(meta, s.tw)
+	return newServerRuntime(meta, s.tw, s.activeQPS)
 }
 
 func (s *serverRuntime) updateMeta(meta *metapb.Server) {
 	s.heathTimeout.Stop()
+	activeQPS := s.activeQPS
 	tw := s.tw
+
 	*s = serverRuntime{}
 	s.tw = tw
+	s.activeQPS = activeQPS
 	s.meta = meta
 	s.id = meta.ID
 	s.cb = meta.CircuitBreaker
-	s.limiter = rate.NewLimiter(rate.Every(time.Second/time.Duration(meta.MaxQPS)), int(meta.MaxQPS))
-	s.status = metapb.Down
+	s.limiter = newRateLimiter(s.activeQPS, s.meta.RateLimitOption)
 	s.circuit = metapb.Open
 	if s.cb != nil {
 		s.barrier = util.NewRateBarrier(int(s.cb.HalfTrafficRate))
@@ -188,10 +172,6 @@ func (s *serverRuntime) fail() {
 func (s *serverRuntime) reset() {
 	s.checkFailCount = 0
 	s.useCheckDuration = time.Duration(s.meta.HeathCheck.CheckInterval)
-}
-
-func (s *serverRuntime) changeTo(status metapb.Status) {
-	s.status = status
 }
 
 type ipSegment struct {
@@ -226,12 +206,11 @@ type apiRule struct {
 }
 
 type apiNode struct {
-	httpOption        util.HTTPOption
-	meta              *metapb.DispatchNode
-	validations       []*apiValidation
-	defaultCookies    []*fasthttp.Cookie
-	dependencies      []string
-	dependenciesPaths [][]string
+	httpOption     util.HTTPOption
+	meta           *metapb.DispatchNode
+	validations    []*apiValidation
+	defaultCookies []*fasthttp.Cookie
+	parsedExprs    []expr.Expr
 }
 
 func newAPINode(meta *metapb.DispatchNode) *apiNode {
@@ -240,11 +219,11 @@ func newAPINode(meta *metapb.DispatchNode) *apiNode {
 	}
 
 	if meta.URLRewrite != "" {
-		matches := dependP.FindAllStringSubmatch(meta.URLRewrite, -1)
-		for _, match := range matches {
-			rn.dependencies = append(rn.dependencies, match[0])
-			rn.dependenciesPaths = append(rn.dependenciesPaths, strings.Split(match[0][1:], "."))
+		exprs, err := expr.Parse([]byte(strings.TrimSpace(meta.URLRewrite)))
+		if err != nil {
+			log.Fatalf("bug: parse url rewrite expr failed with error %+v", err)
 		}
+		rn.parsedExprs = exprs
 	}
 
 	if nil != meta.DefaultValue {
@@ -272,12 +251,11 @@ func newAPINode(meta *metapb.DispatchNode) *apiNode {
 
 	rn.httpOption = *globalHTTPOptions
 	if meta.ReadTimeout > 0 {
-		rn.httpOption.ReadTimeout = time.Second * time.Duration(meta.ReadTimeout)
+		rn.httpOption.ReadTimeout = time.Duration(meta.ReadTimeout)
 	}
 	if meta.WriteTimeout > 0 {
-		rn.httpOption.WriteTimeout = time.Second * time.Duration(meta.WriteTimeout)
+		rn.httpOption.WriteTimeout = time.Duration(meta.WriteTimeout)
 	}
-
 	return rn
 }
 
@@ -316,17 +294,17 @@ type apiRuntime struct {
 
 	meta                *metapb.API
 	nodes               []*apiNode
-	urlPattern          *regexp.Regexp
 	defaultCookies      []*fasthttp.Cookie
 	parsedWhitelist     []*ipSegment
 	parsedBlacklist     []*ipSegment
 	parsedRenderObjects []*renderObject
 }
 
-func newAPIRuntime(meta *metapb.API, tw *goetty.TimeoutWheel) *apiRuntime {
+func newAPIRuntime(meta *metapb.API, tw *goetty.TimeoutWheel, activeQPS int64) *apiRuntime {
 	ar := &apiRuntime{
 		meta: meta,
 	}
+	ar.activeQPS = activeQPS
 	ar.tw = tw
 	ar.init()
 
@@ -336,12 +314,17 @@ func newAPIRuntime(meta *metapb.API, tw *goetty.TimeoutWheel) *apiRuntime {
 func (a *apiRuntime) clone() *apiRuntime {
 	meta := &metapb.API{}
 	pbutil.MustUnmarshal(meta, pbutil.MustMarshal(a.meta))
-	return newAPIRuntime(meta, a.tw)
+	return newAPIRuntime(meta, a.tw, a.activeQPS)
 }
 
 func (a *apiRuntime) updateMeta(meta *metapb.API) {
+	tw := a.tw
+	activeQPS := a.activeQPS
+
 	*a = apiRuntime{}
 	a.meta = meta
+	a.tw = tw
+	a.activeQPS = activeQPS
 	a.init()
 }
 
@@ -350,10 +333,6 @@ func (a *apiRuntime) compare(i, j int) bool {
 }
 
 func (a *apiRuntime) init() {
-	if a.meta.URLPattern != "" {
-		a.urlPattern = regexp.MustCompile(a.meta.URLPattern)
-	}
-
 	for _, n := range a.meta.Nodes {
 		a.nodes = append(a.nodes, newAPINode(n))
 	}
@@ -414,7 +393,7 @@ func (a *apiRuntime) init() {
 		a.barrier = util.NewRateBarrier(int(a.cb.HalfTrafficRate))
 	}
 	if a.meta.MaxQPS > 0 {
-		a.limiter = rate.NewLimiter(rate.Every(time.Second/time.Duration(a.meta.MaxQPS)), int(a.meta.MaxQPS))
+		a.limiter = newRateLimiter(a.activeQPS, a.meta.RateLimitOption)
 	}
 
 	return
@@ -464,19 +443,8 @@ func (a *apiRuntime) allowWithWhitelist(ip string) bool {
 	return false
 }
 
-func (a *apiRuntime) rewriteURL(req *fasthttp.Request, node *apiNode, ctx *multiContext) string {
-	rewrite := node.meta.URLRewrite
-	if rewrite == "" || a.meta.URLPattern == "" {
-		return ""
-	}
-
-	if nil != ctx && len(node.dependencies) > 0 {
-		for idx, dep := range node.dependencies {
-			rewrite = strings.Replace(rewrite, dep, ctx.getAttr(node.dependenciesPaths[idx]...), -1)
-		}
-	}
-
-	return a.urlPattern.ReplaceAllString(hack.SliceToString(req.URI().RequestURI()), rewrite)
+func (a *apiRuntime) isUp() bool {
+	return a.meta.Status == metapb.Up
 }
 
 func (a *apiRuntime) matches(req *fasthttp.Request) bool {
@@ -486,28 +454,16 @@ func (a *apiRuntime) matches(req *fasthttp.Request) bool {
 
 	switch a.matchRule() {
 	case metapb.MatchAll:
-		return a.isDomainMatches(req) && a.isMethodMatches(req) && a.isURIMatches(req)
+		return a.isDomainMatches(req) && a.isMethodMatches(req)
 	case metapb.MatchAny:
-		return a.isDomainMatches(req) || a.isMethodMatches(req) || a.isURIMatches(req)
+		return a.isDomainMatches(req) || a.isMethodMatches(req)
 	default:
-		return a.isDomainMatches(req) || (a.isMethodMatches(req) && a.isURIMatches(req))
+		return a.isDomainMatches(req) || a.isMethodMatches(req)
 	}
-}
-
-func (a *apiRuntime) isUp() bool {
-	return a.meta.Status == metapb.Up
 }
 
 func (a *apiRuntime) isMethodMatches(req *fasthttp.Request) bool {
 	return a.meta.Method == "*" || strings.ToUpper(hack.SliceToString(req.Header.Method())) == a.meta.Method
-}
-
-func (a *apiRuntime) isURIMatches(req *fasthttp.Request) bool {
-	if a.urlPattern == nil {
-		return false
-	}
-
-	return a.urlPattern.Match(req.URI().RequestURI())
 }
 
 func (a *apiRuntime) isDomainMatches(req *fasthttp.Request) bool {
@@ -559,23 +515,40 @@ func newRoutingRuntime(meta *metapb.Routing) *routingRuntime {
 	return r
 }
 
+func (a *routingRuntime) clone() *routingRuntime {
+	meta := &metapb.Routing{}
+	pbutil.MustUnmarshal(meta, pbutil.MustMarshal(a.meta))
+	return newRoutingRuntime(meta)
+}
+
 func (a *routingRuntime) updateMeta(meta *metapb.Routing) {
 	a.meta = meta
 	a.barrier = util.NewRateBarrier(int(a.meta.TrafficRate))
 }
 
-func (a *routingRuntime) matches(apiID uint64, req *fasthttp.Request) bool {
+func (a *routingRuntime) matches(apiID uint64, req *fasthttp.Request, requestTag string) bool {
 	if a.meta.API > 0 && apiID != a.meta.API {
 		return false
 	}
 
 	for _, c := range a.meta.Conditions {
 		if !conditionsMatches(&c, req) {
+			log.Debugf("%s: skip routing %s by condition %+v",
+				requestTag,
+				a.meta.Name,
+				c)
 			return false
 		}
 	}
 
-	return a.barrier.Allow()
+	value := a.barrier.Allow()
+	if !value {
+		log.Debugf("%s: skip routing %s by rate",
+			requestTag,
+			a.meta.Name)
+	}
+
+	return value
 }
 
 func (a *routingRuntime) isUp() bool {

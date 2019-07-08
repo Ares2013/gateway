@@ -2,7 +2,7 @@
 github.com/beorn7/perks/quantile
 # github.com/buger/jsonparser v0.0.0-20180318095312-2cac668e8456
 github.com/buger/jsonparser
-# github.com/coreos/etcd v0.0.0-20180615164156-33245c6b5b49
+# github.com/coreos/etcd v3.3.12+incompatible
 github.com/coreos/etcd/clientv3
 github.com/coreos/etcd/mvcc/mvccpb
 github.com/coreos/etcd/auth/authpb
@@ -14,12 +14,11 @@ github.com/coreos/etcd/clientv3/naming
 github.com/dgrijalva/jwt-go
 # github.com/fagongzi/goetty v0.0.0-20180427060148-8f06d410550f
 github.com/fagongzi/goetty
-# github.com/fagongzi/grpcx v1.1.0
+# github.com/fagongzi/grpcx v0.0.0-20190226052515-f1ec50ae76bf
 github.com/fagongzi/grpcx
 # github.com/fagongzi/log v0.0.0-20170831135209-9a647df25e0e
 github.com/fagongzi/log
 # github.com/fagongzi/util v0.0.0-20180330021808-4acf02da76a9
-github.com/fagongzi/util/collection
 github.com/fagongzi/util/format
 github.com/fagongzi/util/hack
 github.com/fagongzi/util/protoc
@@ -40,11 +39,13 @@ github.com/golang/protobuf/ptypes/duration
 github.com/golang/protobuf/ptypes/timestamp
 # github.com/gorilla/websocket v0.0.0-20180816221803-3ff3320c2a17
 github.com/gorilla/websocket
-# github.com/klauspost/compress v0.0.0-20180708153741-b939724e787a
+# github.com/juju/ratelimit v1.0.1
+github.com/juju/ratelimit
+# github.com/klauspost/compress v1.4.0
 github.com/klauspost/compress/flate
 github.com/klauspost/compress/gzip
 github.com/klauspost/compress/zlib
-# github.com/klauspost/cpuid v0.0.0-20170728055534-ae7887de9fa5
+# github.com/klauspost/cpuid v0.0.0-20180405133222-e7e905edc00e
 github.com/klauspost/cpuid
 # github.com/koding/websocketproxy v0.0.0-20180716164433-0fa3f994f6e7
 github.com/koding/websocketproxy
@@ -75,11 +76,19 @@ github.com/prometheus/procfs
 github.com/prometheus/procfs/nfs
 github.com/prometheus/procfs/xfs
 github.com/prometheus/procfs/internal/util
+# github.com/robertkrimen/otto v0.0.0-20180617131154-15f95af6e78d
+github.com/robertkrimen/otto
+github.com/robertkrimen/otto/ast
+github.com/robertkrimen/otto/dbg
+github.com/robertkrimen/otto/file
+github.com/robertkrimen/otto/parser
+github.com/robertkrimen/otto/registry
+github.com/robertkrimen/otto/token
 # github.com/soheilhy/cmux v0.0.0-20180129155001-e09e9389d85d
 github.com/soheilhy/cmux
-# github.com/valyala/bytebufferpool v0.0.0-20160817181652-e746df99fe4a
+# github.com/valyala/bytebufferpool v1.0.0
 github.com/valyala/bytebufferpool
-# github.com/valyala/fasthttp v0.0.0-20171207120941-e5f51c11919d
+# github.com/valyala/fasthttp v1.2.0
 github.com/valyala/fasthttp
 github.com/valyala/fasthttp/fasthttputil
 github.com/valyala/fasthttp/stackless
@@ -88,7 +97,7 @@ github.com/valyala/fasttemplate
 # golang.org/x/crypto v0.0.0-20180904163835-0709b304e793
 golang.org/x/crypto/acme/autocert
 golang.org/x/crypto/acme
-# golang.org/x/net v0.0.0-20180712202826-d0887baf81f4
+# golang.org/x/net v0.0.0-20180911220305-26e67e76b6c3
 golang.org/x/net/context
 golang.org/x/net/http2
 golang.org/x/net/trace
@@ -98,13 +107,11 @@ golang.org/x/net/idna
 golang.org/x/net/internal/timeseries
 # golang.org/x/sys v0.0.0-20180905080454-ebe1bf3edb33
 golang.org/x/sys/unix
-# golang.org/x/text v0.0.0-20171214130843-f21a4dfb5e38
+# golang.org/x/text v0.3.2
 golang.org/x/text/secure/bidirule
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
 golang.org/x/text/transform
-# golang.org/x/time v0.0.0-20180412165947-fbb02b2291d2
-golang.org/x/time/rate
 # google.golang.org/genproto v0.0.0-20180716172848-2731d4fa720b
 google.golang.org/genproto/googleapis/rpc/status
 # google.golang.org/grpc v0.0.0-20180619221905-168a6198bcb0
@@ -134,3 +141,6 @@ google.golang.org/grpc/tap
 google.golang.org/grpc/transport
 google.golang.org/grpc/balancer/base
 google.golang.org/grpc/internal/grpcrand
+# gopkg.in/sourcemap.v1 v1.0.5
+gopkg.in/sourcemap.v1
+gopkg.in/sourcemap.v1/base64vlq
